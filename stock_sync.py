@@ -2,13 +2,17 @@ import os
 from datetime import datetime
 
 import akshare as ak
-from notion_client import Client
+import requests
 
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
-notion = Client(auth=NOTION_TOKEN)
+HEADERS = {
+    "Authorization": f"Bearer {NOTION_TOKEN}",
+    "Notion-Version": "2022-06-28",
+    "Content-Type": "application/json",
+}
 
 
 def query_database():
@@ -16,29 +20,32 @@ def query_database():
     start_cursor = None
 
     while True:
+        url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
         payload = {}
 
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
-        response = notion.data_sources.query(
-            data_source_id=DATABASE_ID,
-            **payload
-        )
+        response = requests.post(url, headers=HEADERS, json=payload)
 
-        results.extend(response["results"])
+        if response.status_code != 200:
+            print("查询数据库失败：", response.status_code)
+            print(response.text)
+            raise Exception("Notion database query failed")
 
-        if not response.get("has_more"):
+        data = response.json()
+        results.extend(data["results"])
+
+        if not data.get("has_more"):
             break
 
-        start_cursor = response.get("next_cursor")
+        start_cursor = data.get("next_cursor")
 
     return results
 
 
 def get_stock_map():
     df = ak.stock_zh_a_spot_em()
-
     stock_map = {}
 
     for _, row in df.iterrows():
@@ -54,9 +61,10 @@ def get_stock_map():
 
 
 def update_page(page_id, price, pct):
-    notion.pages.update(
-        page_id=page_id,
-        properties={
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+
+    payload = {
+        "properties": {
             "当前价格": {
                 "number": price
             },
@@ -69,7 +77,14 @@ def update_page(page_id, price, pct):
                 }
             }
         }
-    )
+    }
+
+    response = requests.patch(url, headers=HEADERS, json=payload)
+
+    if response.status_code != 200:
+        print("更新页面失败：", response.status_code)
+        print(response.text)
+        raise Exception("Notion page update failed")
 
 
 def main():
@@ -84,6 +99,7 @@ def main():
         code_rich_text = props["股票代码"]["rich_text"]
 
         if len(code_rich_text) == 0:
+            print("跳过：股票代码为空")
             continue
 
         code = code_rich_text[0]["plain_text"].strip().zfill(6)
