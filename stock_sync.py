@@ -17,7 +17,7 @@ def query_database():
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
-        response = notion.databases.query(**payload)
+        response = notion.data_sources.query(**payload)
         results.extend(response["results"])
 
         if not response.get("has_more"):
