@@ -4,7 +4,6 @@ from datetime import datetime
 
 import requests
 
-
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
@@ -16,48 +15,22 @@ NOTION_HEADERS = {
 
 
 def query_database():
-    results = []
-    start_cursor = None
 
-    while True:
-        url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+    url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
 
-        payload = {}
+    response = requests.post(
+        url,
+        headers=NOTION_HEADERS,
+        timeout=30
+    )
 
-        if start_cursor:
-            payload["start_cursor"] = start_cursor
+    response.raise_for_status()
 
-        response = requests.post(
-            url,
-            headers=NOTION_HEADERS,
-            json=payload,
-            timeout=20
-        )
-
-        if response.status_code != 200:
-            raise Exception(response.text)
-
-        data = response.json()
-
-        results.extend(data["results"])
-
-        if not data.get("has_more"):
-            break
-
-        start_cursor = data.get("next_cursor")
-
-    return results
-
-
-def safe_float(value):
-    try:
-        value = str(value).replace(",", "").replace("%", "")
-        return float(value)
-    except:
-        return 0
+    return response.json()["results"]
 
 
 def get_market(code):
+
     code = str(code)
 
     if code.startswith(("6", "9")):
@@ -65,9 +38,6 @@ def get_market(code):
 
     if code.startswith(("0", "2", "3")):
         return "sz"
-
-    if code.startswith(("4", "8")):
-        return "bj"
 
     return "sh"
 
@@ -79,14 +49,14 @@ def get_stock_data(code):
     url = f"https://hq.sinajs.cn/list={market}{code}"
 
     headers = {
-        "Referer": "https://finance.sina.com.cn/",
+        "Referer": "https://finance.sina.com.cn",
         "User-Agent": "Mozilla/5.0"
     }
 
     response = requests.get(
         url,
         headers=headers,
-        timeout=15
+        timeout=30
     )
 
     response.encoding = "gbk"
@@ -94,33 +64,30 @@ def get_stock_data(code):
     text = response.text
 
     if '="' not in text:
-        raise Exception(f"获取失败 {code}")
+        return None
 
-    content = text.split('="')[1].split('"')[0]
+    data = text.split('="')[1].split('"')[0]
 
-    arr = content.split(",")
+    arr = data.split(",")
 
     if len(arr) < 4:
-        raise Exception(f"数据异常 {code}")
+        return None
 
     name = arr[0]
 
-    yesterday_close = safe_float(arr[2])
-    current_price = safe_float(arr[3])
+    yesterday = float(arr[2])
 
-    if yesterday_close == 0:
-        pct = 0
-    else:
-        pct = (
-            (current_price - yesterday_close)
-            / yesterday_close
-            * 100
-        )
+    current = float(arr[3])
+
+    pct = round(
+        (current - yesterday) / yesterday * 100,
+        2
+    )
 
     return {
         "name": name,
-        "price": round(current_price, 2),
-        "pct": round(pct, 2)
+        "price": round(current, 2),
+        "pct": pct
     }
 
 
@@ -148,10 +115,6 @@ def update_page(page_id, price, pct):
                 "number": price
             },
 
-            "今日涨幅": {
-                "number": pct
-            },
-
             "涨跌显示": {
                 "rich_text": [
                     {
@@ -174,30 +137,10 @@ def update_page(page_id, price, pct):
         url,
         headers=NOTION_HEADERS,
         json=payload,
-        timeout=20
+        timeout=30
     )
 
-    if response.status_code != 200:
-        print(response.text)
-        raise Exception("更新失败")
-
-
-def get_code(page):
-
-    props = page["properties"]
-
-    code_prop = props["股票代码"]
-
-    if code_prop["type"] == "rich_text":
-
-        texts = code_prop["rich_text"]
-
-        if not texts:
-            return None
-
-        return texts[0]["plain_text"].zfill(6)
-
-    return None
+    response.raise_for_status()
 
 
 def main():
@@ -206,18 +149,26 @@ def main():
 
     pages = query_database()
 
-    print(f"股票数量：{len(pages)}")
+    print(f"股票数量: {len(pages)}")
 
     for page in pages:
 
-        code = get_code(page)
-
-        if not code:
-            continue
-
         try:
 
+            props = page["properties"]
+
+            code_text = props["股票代码"]["rich_text"]
+
+            if len(code_text) == 0:
+                continue
+
+            code = code_text[0]["plain_text"].strip()
+
             stock = get_stock_data(code)
+
+            if not stock:
+                print(f"{code} 获取失败")
+                continue
 
             update_page(
                 page["id"],
@@ -235,7 +186,7 @@ def main():
 
         except Exception as e:
 
-            print(f"{code} 更新失败")
+            print("更新失败")
 
             print(str(e))
 
