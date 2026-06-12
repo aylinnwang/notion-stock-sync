@@ -13,11 +13,14 @@ def query_database():
     start_cursor = None
 
     while True:
-        payload = {"database_id": DATABASE_ID}
-        if start_cursor:
-            payload["start_cursor"] = start_cursor
+ payload = {}
+if start_cursor:
+    payload["start_cursor"] = start_cursor
 
-        response = notion.data_sources.query(**payload)
+response = notion.data_sources.query(
+    data_source_id=DATABASE_ID,
+    **payload
+)
         results.extend(response["results"])
 
         if not response.get("has_more"):
