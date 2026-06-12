@@ -1,9 +1,6 @@
 import os
 from datetime import datetime
-
-import akshare as ak
 import requests
-
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
@@ -22,18 +19,16 @@ def query_database():
     while True:
         url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
         payload = {}
-
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
-        response = requests.post(url, headers=HEADERS, json=payload, timeout=20)
+        r = requests.post(url, headers=HEADERS, json=payload, timeout=20)
+        data = r.json()
 
-        if response.status_code != 200:
-            print("查询数据库失败：", response.status_code)
-            print(response.text)
-            raise Exception("Notion database query failed")
+        if r.status_code != 200:
+            print(data)
+            raise Exception("查询Notion失败")
 
-        data = response.json()
         results.extend(data["results"])
 
         if not data.get("has_more"):
@@ -46,41 +41,42 @@ def query_database():
 
 def safe_float(value):
     try:
-        if value is None:
-            return 0
-        value = str(value).replace(",", "").strip()
-        if value in ["", "-", "nan", "None"]:
-            return 0
         return float(value)
-    except Exception:
+    except:
         return 0
 
 
-def get_stock_data_by_code(code):
-    try:
-        df = ak.stock_bid_ask_em(symbol=code)
+def get_secid(code):
+    if code.startswith("6"):
+        return f"1.{code}"
+    return f"0.{code}"
 
-        data = {}
-        for _, row in df.iterrows():
-            item = str(row.get("item", "")).strip()
-            value = row.get("value", "")
-            data[item] = value
 
-        price = safe_float(data.get("最新", 0))
-        pct = safe_float(data.get("涨幅", 0))
+def get_stock_data(code):
+    secid = get_secid(code)
 
-        return {
-            "price": price,
-            "pct": pct
-        }
+    url = "https://push2.eastmoney.com/api/qt/stock/get"
+    params = {
+        "secid": secid,
+        "fields": "f43,f57,f58,f169,f170"
+    }
 
-    except Exception as e:
-        print(f"获取股票失败：{code}，原因：{e}")
-        return None
+    r = requests.get(url, params=params, timeout=20)
+    data = r.json().get("data", {})
+
+    price = safe_float(data.get("f43", 0)) / 100
+    pct = safe_float(data.get("f170", 0)) / 100
+
+    return price, pct
 
 
 def update_page(page_id, price, pct):
-    url = f"https://api.notion.com/v1/pages/{page_id}"
+    if pct > 0:
+        show = f"🔴 +{pct:.2f}%"
+    elif pct < 0:
+        show = f"🟢 {pct:.2f}%"
+    else:
+        show = f"⚪ {pct:.2f}%"
 
     payload = {
         "properties": {
@@ -90,6 +86,15 @@ def update_page(page_id, price, pct):
             "今日涨幅": {
                 "number": pct
             },
+            "涨跌显示": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": show
+                        }
+                    }
+                ]
+            },
             "更新日期": {
                 "date": {
                     "start": datetime.now().isoformat()
@@ -98,54 +103,33 @@ def update_page(page_id, price, pct):
         }
     }
 
-    response = requests.patch(url, headers=HEADERS, json=payload, timeout=20)
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    r = requests.patch(url, headers=HEADERS, json=payload, timeout=20)
 
-    if response.status_code != 200:
-        print("更新页面失败：", response.status_code)
-        print(response.text)
-        raise Exception("Notion page update failed")
+    if r.status_code != 200:
+        print(r.text)
+        raise Exception("更新Notion失败")
 
 
 def main():
     print("开始同步A股数据")
 
     pages = query_database()
-    print(f"Notion股票数量：{len(pages)}")
 
     for page in pages:
         props = page["properties"]
 
-        code_rich_text = props["股票代码"]["rich_text"]
-
-        if len(code_rich_text) == 0:
-            print("跳过：股票代码为空")
+        code_text = props["股票代码"]["rich_text"]
+        if not code_text:
             continue
 
-        code = code_rich_text[0]["plain_text"].strip().zfill(6)
+        code = code_text[0]["plain_text"].strip().zfill(6)
 
-        stock_data = get_stock_data_by_code(code)
+        price, pct = get_stock_data(code)
 
-        if stock_data is None:
-            print(f"跳过更新：{code}")
-            continue
+        update_page(page["id"], price, pct)
 
-        price = stock_data["price"]
-        pct = stock_data["pct"]
-
-        update_page(
-            page_id=page["id"],
-            price=price,
-            pct=pct
-        )
-
-        if pct > 0:
-            direction = "🔴上涨"
-        elif pct < 0:
-            direction = "🟢下跌"
-        else:
-            direction = "⚪平盘"
-
-        print(f"已更新：{code} 当前价：{price} 涨幅：{pct}% {direction}")
+        print(f"已更新 {code} 当前价:{price} 涨幅:{pct}%")
 
     print("同步完成")
 
