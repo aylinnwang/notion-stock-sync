@@ -1,0 +1,4 @@
+requests
+notion-client
+akshare
+pandas
