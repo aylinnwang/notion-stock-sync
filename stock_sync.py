@@ -26,7 +26,7 @@ def query_database():
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
-        response = requests.post(url, headers=HEADERS, json=payload)
+        response = requests.post(url, headers=HEADERS, json=payload, timeout=20)
 
         if response.status_code != 200:
             print("查询数据库失败：", response.status_code)
@@ -56,36 +56,31 @@ def safe_float(value):
         return 0
 
 
-def get_stock_map():
-    df = ak.stock_zh_a_spot_em()
+def get_stock_data_by_code(code):
+    try:
+        df = ak.stock_bid_ask_em(symbol=code)
 
-    stock_map = {}
+        data = {}
+        for _, row in df.iterrows():
+            item = str(row.get("item", "")).strip()
+            value = row.get("value", "")
+            data[item] = value
 
-    for _, row in df.iterrows():
-        code = str(row["代码"]).zfill(6)
+        price = safe_float(data.get("最新", 0))
+        pct = safe_float(data.get("涨幅", 0))
 
-        price = safe_float(row.get("最新价", 0))
-        pct = safe_float(row.get("涨跌幅", 0))
-
-        stock_map[code] = {
-            "name": row.get("名称", ""),
+        return {
             "price": price,
-            "pct": pct,
+            "pct": pct
         }
 
-    return stock_map
+    except Exception as e:
+        print(f"获取股票失败：{code}，原因：{e}")
+        return None
 
 
 def update_page(page_id, price, pct):
     url = f"https://api.notion.com/v1/pages/{page_id}"
-
-    # A股习惯：涨红，跌绿
-    if pct > 0:
-        pct_text = f"🔴 +{pct:.2f}%"
-    elif pct < 0:
-        pct_text = f"🟢 {pct:.2f}%"
-    else:
-        pct_text = f"⚪ {pct:.2f}%"
 
     payload = {
         "properties": {
@@ -103,14 +98,12 @@ def update_page(page_id, price, pct):
         }
     }
 
-    response = requests.patch(url, headers=HEADERS, json=payload)
+    response = requests.patch(url, headers=HEADERS, json=payload, timeout=20)
 
     if response.status_code != 200:
         print("更新页面失败：", response.status_code)
         print(response.text)
         raise Exception("Notion page update failed")
-
-    print(f"写入成功：价格={price}，涨幅={pct_text}")
 
 
 def main():
@@ -118,8 +111,6 @@ def main():
 
     pages = query_database()
     print(f"Notion股票数量：{len(pages)}")
-
-    stock_map = get_stock_map()
 
     for page in pages:
         props = page["properties"]
@@ -132,22 +123,29 @@ def main():
 
         code = code_rich_text[0]["plain_text"].strip().zfill(6)
 
-        if code not in stock_map:
-            print(f"未找到股票代码：{code}")
+        stock_data = get_stock_data_by_code(code)
+
+        if stock_data is None:
+            print(f"跳过更新：{code}")
             continue
 
-        data = stock_map[code]
+        price = stock_data["price"]
+        pct = stock_data["pct"]
 
         update_page(
             page_id=page["id"],
-            price=data["price"],
-            pct=data["pct"]
+            price=price,
+            pct=pct
         )
 
-        print(
-            f"已更新：{code} {data['name']} "
-            f"当前价：{data['price']} 涨幅：{data['pct']}%"
-        )
+        if pct > 0:
+            direction = "🔴上涨"
+        elif pct < 0:
+            direction = "🟢下跌"
+        else:
+            direction = "⚪平盘"
+
+        print(f"已更新：{code} 当前价：{price} 涨幅：{pct}% {direction}")
 
     print("同步完成")
 
