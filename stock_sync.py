@@ -44,17 +44,34 @@ def query_database():
     return results
 
 
+def safe_float(value):
+    try:
+        if value is None:
+            return 0
+        value = str(value).replace(",", "").strip()
+        if value in ["", "-", "nan", "None"]:
+            return 0
+        return float(value)
+    except Exception:
+        return 0
+
+
 def get_stock_map():
     df = ak.stock_zh_a_spot_em()
     stock_map = {}
 
+    print("AkShare字段：", list(df.columns))
+
     for _, row in df.iterrows():
         code = str(row["代码"]).zfill(6)
 
+        price = safe_float(row["最新价"])
+        pct = safe_float(row["涨跌幅"])
+
         stock_map[code] = {
             "name": row["名称"],
-            "price": float(row["最新价"]) if str(row["最新价"]) != "-" else 0,
-            "pct": float(row["涨跌幅"]) if str(row["涨跌幅"]) != "-" else 0,
+            "price": price,
+            "pct": pct,
         }
 
     return stock_map
@@ -91,6 +108,8 @@ def main():
     print("开始同步A股数据")
 
     pages = query_database()
+    print(f"Notion股票数量：{len(pages)}")
+
     stock_map = get_stock_map()
 
     for page in pages:
@@ -105,7 +124,7 @@ def main():
         code = code_rich_text[0]["plain_text"].strip().zfill(6)
 
         if code not in stock_map:
-            print(f"未找到股票代码: {code}")
+            print(f"未找到股票代码：{code}")
             continue
 
         data = stock_map[code]
@@ -117,8 +136,8 @@ def main():
         )
 
         print(
-            f"已更新 {code} {data['name']} "
-            f"价格:{data['price']} 涨幅:{data['pct']}%"
+            f"已更新：{code} {data['name']} "
+            f"当前价：{data['price']} 涨幅：{data['pct']}%"
         )
 
     print("同步完成")
