@@ -58,18 +58,17 @@ def safe_float(value):
 
 def get_stock_map():
     df = ak.stock_zh_a_spot_em()
-    stock_map = {}
 
-    print("AkShare字段：", list(df.columns))
+    stock_map = {}
 
     for _, row in df.iterrows():
         code = str(row["代码"]).zfill(6)
 
-        price = safe_float(row["最新价"])
-        pct = safe_float(row["涨跌幅"])
+        price = safe_float(row.get("最新价", 0))
+        pct = safe_float(row.get("涨跌幅", 0))
 
         stock_map[code] = {
-            "name": row["名称"],
+            "name": row.get("名称", ""),
             "price": price,
             "pct": pct,
         }
@@ -79,6 +78,14 @@ def get_stock_map():
 
 def update_page(page_id, price, pct):
     url = f"https://api.notion.com/v1/pages/{page_id}"
+
+    # A股习惯：涨红，跌绿
+    if pct > 0:
+        pct_text = f"🔴 +{pct:.2f}%"
+    elif pct < 0:
+        pct_text = f"🟢 {pct:.2f}%"
+    else:
+        pct_text = f"⚪ {pct:.2f}%"
 
     payload = {
         "properties": {
@@ -102,6 +109,8 @@ def update_page(page_id, price, pct):
         print("更新页面失败：", response.status_code)
         print(response.text)
         raise Exception("Notion page update failed")
+
+    print(f"写入成功：价格={price}，涨幅={pct_text}")
 
 
 def main():
